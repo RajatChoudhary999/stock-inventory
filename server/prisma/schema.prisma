@@ -1,0 +1,187 @@
+// Prisma schema for StockFlow.
+// Design notes:
+//  - Money uses Decimal (NUMERIC), never Float, to avoid rounding errors.
+//  - stock_movements is an append-only ledger: every stock change is recorded,
+//    so current stock can always be audited/reconstructed.
+//  - Deliberate onDelete rules: setting a product's category to null on delete,
+//    cascading order_items when an order is removed.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  STAFF
+}
+
+enum OrderType {
+  PURCHASE
+  SALE
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  FULFILLED
+  CANCELLED
+}
+
+enum MovementReason {
+  SALE
+  PURCHASE
+  ADJUSTMENT
+  RETURN
+  DAMAGE
+}
+
+model User {
+  id            Int       @id @default(autoincrement())
+  name          String
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  role          UserRole  @default(STAFF)
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  orders        Order[]
+  movements     StockMovement[]
+  notifications Notification[]
+  activityLogs  ActivityLog[]
+
+  @@map("users")
+}
+
+model Category {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  description String?
+  products    Product[]
+
+  @@map("categories")
+}
+
+model Supplier {
+  id        Int       @id @default(autoincrement())
+  name      String
+  email     String?
+  phone     String?
+  address   String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  products  Product[]
+  orders    Order[]
+
+  @@map("suppliers")
+}
+
+model Product {
+  id              Int      @id @default(autoincrement())
+  sku             String   @unique
+  name            String
+  description     String?
+  categoryId      Int?     @map("category_id")
+  supplierId      Int?     @map("supplier_id")
+  unitPrice       Decimal  @map("unit_price") @db.Decimal(12, 2)
+  costPrice       Decimal  @map("cost_price") @db.Decimal(12, 2)
+  quantityInStock Int      @default(0) @map("quantity_in_stock")
+  reorderLevel    Int      @default(10) @map("reorder_level")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  category   Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  supplier   Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  orderItems OrderItem[]
+  movements  StockMovement[]
+
+  @@index([categoryId])
+  @@index([quantityInStock])
+  @@map("products")
+}
+
+model Order {
+  id           Int         @id @default(autoincrement())
+  orderNumber  String      @unique @map("order_number")
+  type         OrderType
+  status       OrderStatus @default(PENDING)
+  supplierId   Int?        @map("supplier_id")
+  customerName String?     @map("customer_name")
+  totalAmount  Decimal     @default(0) @map("total_amount") @db.Decimal(14, 2)
+  createdById  Int         @map("created_by")
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  supplier  Supplier?       @relation(fields: [supplierId], references: [id])
+  createdBy User            @relation(fields: [createdById], references: [id])
+  items     OrderItem[]
+  movements StockMovement[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        Int     @id @default(autoincrement())
+  orderId   Int     @map("order_id")
+  productId Int     @map("product_id")
+  quantity  Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal Decimal @map("line_total") @db.Decimal(14, 2)
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model StockMovement {
+  id               Int            @id @default(autoincrement())
+  productId        Int            @map("product_id")
+  changeQty        Int            @map("change_qty")
+  reason           MovementReason
+  notes            String?
+  referenceOrderId Int?           @map("reference_order_id")
+  createdById      Int            @map("created_by")
+  createdAt        DateTime       @default(now()) @map("created_at")
+
+  product   Product @relation(fields: [productId], references: [id])
+  order     Order?  @relation(fields: [referenceOrderId], references: [id])
+  createdBy User    @relation(fields: [createdById], references: [id])
+
+  @@index([productId, createdAt])
+  @@map("stock_movements")
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @map("user_id")
+  type      String
+  message   String
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model ActivityLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @map("user_id")
+  action    String
+  entity    String?
+  entityId  Int?     @map("entity_id")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("activity_logs")
+}
